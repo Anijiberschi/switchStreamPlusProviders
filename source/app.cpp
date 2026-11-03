@@ -3219,6 +3219,46 @@ struct StreamCardDisplay {
     std::string line2;
 };
 
+// Debrid tag that Torrentio (and similar addons) put at the start of a
+// stream's name when a debrid service is configured, e.g.
+//   "[TB+] Torrentio\n1080p"         -> cached on TorBox, plays instantly
+//   "[TB download] Torrentio\n1080p" -> not cached, TorBox downloads it first
+// Returns a short label such as "TB+" or "TB DL", or "" for non-debrid streams.
+static std::string debridBadge(const Stream& s) {
+    std::string first = s.name.substr(0, s.name.find('\n'));
+    size_t open = first.find('[');
+    size_t close = first.find(']');
+    if (open != 0 || close == std::string::npos) return "";
+    std::string inner = first.substr(1, close - 1);
+
+    size_t codeLen = 0;
+    while (codeLen < inner.size() && isalpha((unsigned char)inner[codeLen])) codeLen++;
+    std::string code = inner.substr(0, codeLen);
+    static const char* KNOWN[] = {"TB", "RD", "AD", "PM", "DL", "ED", "OC", "Putio"};
+    bool known = false;
+    for (const char* k : KNOWN) {
+        if (code == k) { known = true; break; }
+    }
+    if (!known) return "";
+
+    std::string rest = inner.substr(codeLen);
+    std::string lowRest = rest;
+    for (char& c : lowRest) c = (char)tolower((unsigned char)c);
+    if (lowRest.find("download") != std::string::npos) return code + " DL";
+    if (rest.find('+') != std::string::npos || rest.find("\xe2\x9a\xa1") != std::string::npos) return code + "+";
+    return code;
+}
+
+// Remove a leading "[TB+] " style tag so it isn't shown twice.
+static std::string stripDebridTag(const std::string& text) {
+    if (text.empty() || text[0] != '[') return text;
+    size_t close = text.find(']');
+    if (close == std::string::npos) return text;
+    size_t start = close + 1;
+    while (start < text.size() && text[start] == ' ') start++;
+    return text.substr(start);
+}
+
 static StreamCardDisplay formatStreamCard(const Stream& s) {
     std::string sizeStr;
     std::string seedersStr;
@@ -3373,9 +3413,18 @@ static StreamCardDisplay formatStreamCard(const Stream& s) {
         else qualityStr = "HLS";
     }
 
+    std::string badge = debridBadge(s);
+    if (!badge.empty()) {
+        providerStr = stripDebridTag(providerStr);
+        if (providerStr.empty()) providerStr = s.addonName;
+    }
+
     std::string line1 = providerStr;
     if (!qualityStr.empty()) {
         line1 += " • " + qualityStr;
+    }
+    if (!badge.empty()) {
+        line1 = badge + " • " + line1;
     }
 
     std::string line2;
@@ -3557,6 +3606,12 @@ static std::string formatStreamDisplay(const Stream& s) {
     while (!nameFlat.empty() && nameFlat.back() == ' ') nameFlat.pop_back();
 
     std::string res;
+    std::string badge = debridBadge(s);
+    if (!badge.empty()) {
+        providerStr = stripDebridTag(providerStr);
+        if (providerStr.empty()) providerStr = s.addonName;
+        res += "[" + badge + "] ";
+    }
     if (!sizeStr.empty()) {
         res += "[" + sizeStr + "] ";
     }
