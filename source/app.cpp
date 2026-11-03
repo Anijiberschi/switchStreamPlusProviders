@@ -1681,7 +1681,7 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
         }
 
         // Build list of active setting IDs to map m_settingsIndex
-        std::vector<int> settingIds = {0, 1, 2, 3, 4}; // Torrents, Host, HwDec, SubLang, ResMon
+        std::vector<int> settingIds = {0, 1, 11, 12, 2, 3, 4}; // Torrents, Host, Debrid, DebridKey, HwDec, SubLang, ResMon
         if (m_addonManager.getShowResourceMonitor()) {
             settingIds.push_back(5); // RAM
             settingIds.push_back(6); // Cache
@@ -1718,6 +1718,8 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
                     m_addonManager.setTorrServerHost(host);
                     m_addonManager.saveConfig(CONFIG_FILE);
                 }
+            } else if (currentId == 11 || currentId == 12) {
+                handleDebridSetting(currentId);
             } else if (currentId == 2) {
                 bool enabled = !m_addonManager.getHwDecode();
                 m_addonManager.setHwDecode(enabled);
@@ -2499,7 +2501,7 @@ void App::handleTouch(int x, int y) {
             return;
         }
 
-        std::vector<int> settingIds = {0, 1, 2, 3, 4};
+        std::vector<int> settingIds = {0, 1, 11, 12, 2, 3, 4};
         if (m_addonManager.getShowResourceMonitor()) {
             settingIds.push_back(5); // RAM
             settingIds.push_back(6); // Cache
@@ -2539,6 +2541,8 @@ void App::handleTouch(int x, int y) {
                         m_addonManager.setTorrServerHost(host);
                         m_addonManager.saveConfig(CONFIG_FILE);
                     }
+                } else if (id == 11 || id == 12) {
+                    handleDebridSetting(id);
                 } else if (id == 2) {
                     bool enabled = !m_addonManager.getHwDecode();
                     m_addonManager.setHwDecode(enabled);
@@ -5121,6 +5125,8 @@ void App::renderSettings() {
     std::vector<SettingOption> options = {
         {0, "Enable Torrent Streams", "Native on-device BitTorrent streaming using RAM circular buffer.", m_addonManager.getEnableTorrents() ? "ON (Enabled)" : "OFF (Disabled)", false},
         {1, "TorrServer Host URL", "Endpoint for streaming torrent-based media files.", m_addonManager.getTorrServerHost(), false},
+        {11, "Torrentio Debrid Provider", "Resolve Torrentio results through a debrid service (direct HTTPS, no P2P).", AddonManager::debridProviderLabel(m_addonManager.getDebridProvider()), false},
+        {12, "Debrid API Key", "Your " + (m_addonManager.getDebridProvider().empty() ? std::string("debrid") : AddonManager::debridProviderLabel(m_addonManager.getDebridProvider())) + " API key (from the provider's account settings).", maskedDebridKey(), false},
         {2, "Hardware Decoding", "Uses GPU-accelerated video decoding context (recommended).", m_addonManager.getHwDecode() ? "ON (Enabled)" : "OFF (Disabled)", false},
         {3, "Preferred Subtitle Language", "Default language code for media subtitle streams.", m_addonManager.getSubtitleLang(), false},
         {4, "Show Memory Consumption", "Displays live RAM, cache, CPU, and data consumption HUD throughout app.", m_addonManager.getShowResourceMonitor() ? "ON (Enabled)" : "OFF (Disabled)", false}
@@ -7724,6 +7730,27 @@ void App::startTorrentPolling() {
     });
 }
 
+std::string App::maskedDebridKey() const {
+    std::string key = m_addonManager.getDebridApiKey();
+    if (key.empty()) return "Not set";
+    if (key.size() <= 4) return "****";
+    return "****" + key.substr(key.size() - 4);
+}
+
+void App::handleDebridSetting(int id) {
+    if (id == 11) {
+        m_addonManager.setDebridProvider(AddonManager::nextDebridProvider(m_addonManager.getDebridProvider()));
+        m_addonManager.saveConfig(CONFIG_FILE);
+    } else if (id == 12) {
+        std::string label = AddonManager::debridProviderLabel(m_addonManager.getDebridProvider());
+        if (label == "Off") label = "debrid";
+        std::string key = m_addonManager.getDebridApiKey();
+        openSwkbd(key, "Enter your " + label + " API key (leave empty to clear)", key);
+        m_addonManager.setDebridApiKey(key);
+        m_addonManager.saveConfig(CONFIG_FILE);
+    }
+}
+
 void App::playStream(const Stream& stream) {
     std::string playUrl = stream.url;
     if (playUrl.empty() && !stream.infoHash.empty()) {
@@ -7856,7 +7883,7 @@ void App::playStream(const Stream& stream) {
         return;
     }
 
-    printf("Playing stream URL: %s\n", playUrl.c_str());
+    printf("Playing stream URL: %s\n", m_addonManager.redactSecrets(playUrl).c_str());
 
     m_player.play(playUrl, stream.httpHeaderFields);
     m_screen = Screen::PLAYER;

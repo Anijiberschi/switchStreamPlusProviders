@@ -73,6 +73,8 @@ private:
     void sortSearchResults();
     void loadDetail(const std::string& type, const std::string& id);
     void playStream(const Stream& stream);
+    void handleDebridSetting(int id);       // Settings rows 11 (provider) / 12 (API key)
+    std::string maskedDebridKey() const;    // "****abcd" for display
     void startTorrentPolling();
     void drawTopNavBar();
 
