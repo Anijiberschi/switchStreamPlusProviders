@@ -63,6 +63,15 @@ bool AddonManager::loadConfig(const std::string& configPath) {
         m_enableTorrents = true;
     }
 
+    m_debridProvider.clear();
+    m_debridApiKey.clear();
+    if (doc.HasMember("debrid_provider") && doc["debrid_provider"].IsString()) {
+        m_debridProvider = doc["debrid_provider"].GetString();
+    }
+    if (doc.HasMember("debrid_api_key") && doc["debrid_api_key"].IsString()) {
+        setDebridApiKey(doc["debrid_api_key"].GetString());
+    }
+
     if (doc.HasMember("suppress_stream_warning") && doc["suppress_stream_warning"].IsBool()) {
         m_suppressStreamAddonWarning = doc["suppress_stream_warning"].GetBool();
     } else {
@@ -333,6 +342,12 @@ bool AddonManager::saveConfig(const std::string& configPath) const {
 
     writer.Key("enable_torrents");
     writer.Bool(m_enableTorrents);
+
+    writer.Key("debrid_provider");
+    writer.String(m_debridProvider.c_str());
+
+    writer.Key("debrid_api_key");
+    writer.String(m_debridApiKey.c_str());
 
     writer.Key("suppress_stream_warning");
     writer.Bool(m_suppressStreamAddonWarning);
@@ -1150,13 +1165,18 @@ std::vector<Stream> AddonManager::getAllStreams(const std::string& type,
             if (!match) continue;
         }
 
+        // Computed here (not in the worker) so debrid settings are read on this thread.
+        std::string streamTransportUrl = applyDebridConfig(addon.transportUrl);
+
         futures.push_back(std::async(std::launch::async,
-            [this, addon, type, videoId]() mutable -> StreamVec {
+            [this, addon, type, videoId, streamTransportUrl]() mutable -> StreamVec {
                 ensureManifest(addon);
                 if (!addonHandles(addon, "stream", type, videoId)) return {};
                 StreamVec streams;
                 StreamResponse resp;
-                if (m_client.fetchStreams(addon.manifest, type, videoId, resp)) {
+                AddonManifest streamManifest = addon.manifest;
+                streamManifest.transportUrl = streamTransportUrl;
+                if (m_client.fetchStreams(streamManifest, type, videoId, resp)) {
                     std::string aName = addon.manifest.name.empty() ? getAddonFallbackName(addon.transportUrl) : addon.manifest.name;
                     for (auto& s : resp.streams) {
                         if (s.addonName.empty()) s.addonName = aName;
@@ -1172,6 +1192,61 @@ std::vector<Stream> AddonManager::getAllStreams(const std::string& type,
         for (auto& s : streams) allStreams.push_back(std::move(s));
     }
     return allStreams;
+}
+
+// ─── Debrid (Torrentio) ──────────────────────
+
+static const char* TORRENTIO_BASE = "https://torrentio.strem.fun";
+
+void AddonManager::setDebridApiKey(const std::string& key) {
+    // Trim whitespace that the on-screen keyboard or a paste may add
+    size_t b = key.find_first_not_of(" \t\r\n");
+    size_t e = key.find_last_not_of(" \t\r\n");
+    m_debridApiKey = (b == std::string::npos) ? "" : key.substr(b, e - b + 1);
+}
+
+std::string AddonManager::debridProviderLabel(const std::string& provider) {
+    if (provider == "torbox") return "TorBox";
+    if (provider == "realdebrid") return "Real-Debrid";
+    return "Off";
+}
+
+std::string AddonManager::nextDebridProvider(const std::string& provider) {
+    if (provider.empty()) return "torbox";
+    if (provider == "torbox") return "realdebrid";
+    return "";
+}
+
+std::string AddonManager::applyDebridConfig(const std::string& transportUrl) const {
+    if (!isDebridActive()) return transportUrl;
+
+    // Only rewrite the stock Torrentio URL. A Torrentio URL that the user already
+    // configured by hand (it has an options segment) is left exactly as it is.
+    std::string base = transportUrl;
+    const std::string suffix = "/manifest.json";
+    if (base.size() >= suffix.size() &&
+        base.compare(base.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        base.erase(base.size() - suffix.size());
+    }
+    while (!base.empty() && base.back() == '/') base.pop_back();
+    if (strcasecmp(base.c_str(), TORRENTIO_BASE) != 0) return transportUrl;
+
+    // Torrentio reads its options from the path: "key=value|key=value".
+    // "|" is sent percent-encoded. 4K is filtered out because the Switch can't
+    // decode it smoothly (the app already drops 4K results from raw torrents).
+    return std::string(TORRENTIO_BASE) + "/" + m_debridProvider + "=" + m_debridApiKey +
+           "%7Cqualityfilter=4k/manifest.json";
+}
+
+std::string AddonManager::redactSecrets(const std::string& text) const {
+    if (m_debridApiKey.size() < 4) return text;
+    std::string out = text;
+    size_t pos = 0;
+    while ((pos = out.find(m_debridApiKey, pos)) != std::string::npos) {
+        out.replace(pos, m_debridApiKey.size(), "***");
+        pos += 3;
+    }
+    return out;
 }
 
 bool AddonManager::isTmdbAddon(const std::string& name, const std::string& id, const std::string& url) {

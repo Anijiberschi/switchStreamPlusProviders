@@ -1681,7 +1681,7 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
         }
 
         // Build list of active setting IDs to map m_settingsIndex
-        std::vector<int> settingIds = {0, 1, 2, 3, 4}; // Torrents, Host, HwDec, SubLang, ResMon
+        std::vector<int> settingIds = {0, 1, 11, 12, 2, 3, 4}; // Torrents, Host, Debrid, DebridKey, HwDec, SubLang, ResMon
         if (m_addonManager.getShowResourceMonitor()) {
             settingIds.push_back(5); // RAM
             settingIds.push_back(6); // Cache
@@ -1718,6 +1718,8 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
                     m_addonManager.setTorrServerHost(host);
                     m_addonManager.saveConfig(CONFIG_FILE);
                 }
+            } else if (currentId == 11 || currentId == 12) {
+                handleDebridSetting(currentId);
             } else if (currentId == 2) {
                 bool enabled = !m_addonManager.getHwDecode();
                 m_addonManager.setHwDecode(enabled);
@@ -2499,7 +2501,7 @@ void App::handleTouch(int x, int y) {
             return;
         }
 
-        std::vector<int> settingIds = {0, 1, 2, 3, 4};
+        std::vector<int> settingIds = {0, 1, 11, 12, 2, 3, 4};
         if (m_addonManager.getShowResourceMonitor()) {
             settingIds.push_back(5); // RAM
             settingIds.push_back(6); // Cache
@@ -2539,6 +2541,8 @@ void App::handleTouch(int x, int y) {
                         m_addonManager.setTorrServerHost(host);
                         m_addonManager.saveConfig(CONFIG_FILE);
                     }
+                } else if (id == 11 || id == 12) {
+                    handleDebridSetting(id);
                 } else if (id == 2) {
                     bool enabled = !m_addonManager.getHwDecode();
                     m_addonManager.setHwDecode(enabled);
@@ -3215,6 +3219,46 @@ struct StreamCardDisplay {
     std::string line2;
 };
 
+// Debrid tag that Torrentio (and similar addons) put at the start of a
+// stream's name when a debrid service is configured, e.g.
+//   "[TB+] Torrentio\n1080p"         -> cached on TorBox, plays instantly
+//   "[TB download] Torrentio\n1080p" -> not cached, TorBox downloads it first
+// Returns a short label such as "TB+" or "TB DL", or "" for non-debrid streams.
+static std::string debridBadge(const Stream& s) {
+    std::string first = s.name.substr(0, s.name.find('\n'));
+    size_t open = first.find('[');
+    size_t close = first.find(']');
+    if (open != 0 || close == std::string::npos) return "";
+    std::string inner = first.substr(1, close - 1);
+
+    size_t codeLen = 0;
+    while (codeLen < inner.size() && isalpha((unsigned char)inner[codeLen])) codeLen++;
+    std::string code = inner.substr(0, codeLen);
+    static const char* KNOWN[] = {"TB", "RD", "AD", "PM", "DL", "ED", "OC", "Putio"};
+    bool known = false;
+    for (const char* k : KNOWN) {
+        if (code == k) { known = true; break; }
+    }
+    if (!known) return "";
+
+    std::string rest = inner.substr(codeLen);
+    std::string lowRest = rest;
+    for (char& c : lowRest) c = (char)tolower((unsigned char)c);
+    if (lowRest.find("download") != std::string::npos) return code + " DL";
+    if (rest.find('+') != std::string::npos || rest.find("\xe2\x9a\xa1") != std::string::npos) return code + "+";
+    return code;
+}
+
+// Remove a leading "[TB+] " style tag so it isn't shown twice.
+static std::string stripDebridTag(const std::string& text) {
+    if (text.empty() || text[0] != '[') return text;
+    size_t close = text.find(']');
+    if (close == std::string::npos) return text;
+    size_t start = close + 1;
+    while (start < text.size() && text[start] == ' ') start++;
+    return text.substr(start);
+}
+
 static StreamCardDisplay formatStreamCard(const Stream& s) {
     std::string sizeStr;
     std::string seedersStr;
@@ -3369,9 +3413,18 @@ static StreamCardDisplay formatStreamCard(const Stream& s) {
         else qualityStr = "HLS";
     }
 
+    std::string badge = debridBadge(s);
+    if (!badge.empty()) {
+        providerStr = stripDebridTag(providerStr);
+        if (providerStr.empty()) providerStr = s.addonName;
+    }
+
     std::string line1 = providerStr;
     if (!qualityStr.empty()) {
         line1 += " • " + qualityStr;
+    }
+    if (!badge.empty()) {
+        line1 = badge + " • " + line1;
     }
 
     std::string line2;
@@ -3553,6 +3606,12 @@ static std::string formatStreamDisplay(const Stream& s) {
     while (!nameFlat.empty() && nameFlat.back() == ' ') nameFlat.pop_back();
 
     std::string res;
+    std::string badge = debridBadge(s);
+    if (!badge.empty()) {
+        providerStr = stripDebridTag(providerStr);
+        if (providerStr.empty()) providerStr = s.addonName;
+        res += "[" + badge + "] ";
+    }
     if (!sizeStr.empty()) {
         res += "[" + sizeStr + "] ";
     }
@@ -5121,6 +5180,8 @@ void App::renderSettings() {
     std::vector<SettingOption> options = {
         {0, "Enable Torrent Streams", "Native on-device BitTorrent streaming using RAM circular buffer.", m_addonManager.getEnableTorrents() ? "ON (Enabled)" : "OFF (Disabled)", false},
         {1, "TorrServer Host URL", "Endpoint for streaming torrent-based media files.", m_addonManager.getTorrServerHost(), false},
+        {11, "Torrentio Debrid Provider", "Resolve Torrentio results through a debrid service (direct HTTPS, no P2P).", AddonManager::debridProviderLabel(m_addonManager.getDebridProvider()), false},
+        {12, "Debrid API Key", "Your " + (m_addonManager.getDebridProvider().empty() ? std::string("debrid") : AddonManager::debridProviderLabel(m_addonManager.getDebridProvider())) + " API key (from the provider's account settings).", maskedDebridKey(), false},
         {2, "Hardware Decoding", "Uses GPU-accelerated video decoding context (recommended).", m_addonManager.getHwDecode() ? "ON (Enabled)" : "OFF (Disabled)", false},
         {3, "Preferred Subtitle Language", "Default language code for media subtitle streams.", m_addonManager.getSubtitleLang(), false},
         {4, "Show Memory Consumption", "Displays live RAM, cache, CPU, and data consumption HUD throughout app.", m_addonManager.getShowResourceMonitor() ? "ON (Enabled)" : "OFF (Disabled)", false}
@@ -7724,6 +7785,27 @@ void App::startTorrentPolling() {
     });
 }
 
+std::string App::maskedDebridKey() const {
+    std::string key = m_addonManager.getDebridApiKey();
+    if (key.empty()) return "Not set";
+    if (key.size() <= 4) return "****";
+    return "****" + key.substr(key.size() - 4);
+}
+
+void App::handleDebridSetting(int id) {
+    if (id == 11) {
+        m_addonManager.setDebridProvider(AddonManager::nextDebridProvider(m_addonManager.getDebridProvider()));
+        m_addonManager.saveConfig(CONFIG_FILE);
+    } else if (id == 12) {
+        std::string label = AddonManager::debridProviderLabel(m_addonManager.getDebridProvider());
+        if (label == "Off") label = "debrid";
+        std::string key = m_addonManager.getDebridApiKey();
+        openSwkbd(key, "Enter your " + label + " API key (leave empty to clear)", key);
+        m_addonManager.setDebridApiKey(key);
+        m_addonManager.saveConfig(CONFIG_FILE);
+    }
+}
+
 void App::playStream(const Stream& stream) {
     std::string playUrl = stream.url;
     if (playUrl.empty() && !stream.infoHash.empty()) {
@@ -7856,7 +7938,7 @@ void App::playStream(const Stream& stream) {
         return;
     }
 
-    printf("Playing stream URL: %s\n", playUrl.c_str());
+    printf("Playing stream URL: %s\n", m_addonManager.redactSecrets(playUrl).c_str());
 
     m_player.play(playUrl, stream.httpHeaderFields);
     m_screen = Screen::PLAYER;

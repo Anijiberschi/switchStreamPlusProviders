@@ -108,6 +108,25 @@ public:
     bool getEnableTorrents() const { return m_enableTorrents; }
     void setEnableTorrents(bool enable) { m_enableTorrents = enable; }
 
+    // ─── Debrid (Torrentio) ──────────────────
+    // Provider id as used by Torrentio's URL config ("torbox", "realdebrid"),
+    // or empty when debrid is off.
+    std::string getDebridProvider() const { return m_debridProvider; }
+    void setDebridProvider(const std::string& provider) { m_debridProvider = provider; }
+    std::string getDebridApiKey() const { return m_debridApiKey; }
+    void setDebridApiKey(const std::string& key);
+    bool isDebridActive() const { return !m_debridProvider.empty() && !m_debridApiKey.empty(); }
+    static std::string debridProviderLabel(const std::string& provider);
+    static std::string nextDebridProvider(const std::string& provider);
+
+    // If transportUrl is the stock, unconfigured Torrentio addon and debrid is
+    // active, returns the Torrentio URL configured for the debrid provider.
+    // Otherwise returns transportUrl unchanged.
+    std::string applyDebridConfig(const std::string& transportUrl) const;
+
+    // Replace the debrid API key with "***" so it never ends up in logs.
+    std::string redactSecrets(const std::string& text) const;
+
     bool getSuppressStreamAddonWarning() const { return m_suppressStreamAddonWarning; }
     void setSuppressStreamAddonWarning(bool suppress) { m_suppressStreamAddonWarning = suppress; }
 
@@ -160,6 +179,8 @@ private:
     std::string m_subtitleLang = "en";
     bool m_enableTorrents = true; // Default: true (out-of-the-box streaming support)
     bool m_suppressStreamAddonWarning = false;
+    std::string m_debridProvider;  // "", "torbox", "realdebrid"
+    std::string m_debridApiKey;
     bool m_showResourceMonitor = false;
     bool m_showRamUsage = true;
     bool m_showCacheUsage = true;
